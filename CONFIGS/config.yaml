@@ -1,0 +1,81 @@
+# --- Main configuration file for the experiment ---
+output:
+  output_dir: output/run_v11.1.1/
+  plot_dir: output/run_v11.1.1/plots/
+
+seed: 117
+# --- Dataset configuration ---
+dataset:
+  hdf5_path: RAW/DATA/SpectralData.hdf5
+  aux_table_path: RAW/DATA/AuxillaryTable.csv
+  FM_label_path: RAW/GROUND_TRUTH/Training_FM_Parameter_Table.csv
+  QT_label_path: RAW/GROUND_TRUTH/Training_QuartilesTable.csv
+
+  wavelength_map_path: RAW/wavelength_grid_map.csv
+  exomol_path: XSEC
+  train_validation_split: #as fraction, must add to 1
+    - 0.5
+    - 0.5
+  n_samples: full # 41423 # same as 22
+
+  label_header:
+    - planet_temp
+    - log_H2O
+    - log_CO2
+    - log_CH4
+    - log_CO
+    - log_NH3
+  label_index: # which labels to predict --planet_ID,planet_temp,log_H2O,log_CO2,log_CH4,log_CO,log_NH3
+    - 0 #planet temp
+    - 1 #log H20
+    - 2 #log CO2
+    - 3 #log CH4
+    - 4 #log CO
+    - 5 #log NH3
+  auxilliary_header:
+    - star_distance
+    - star_mass_kg
+    - star_radius_m
+    - star_temperature
+    - planet_mass_kg
+    - planet_orbital_period
+    - planet_distance
+    - planet_radius_m
+    - planet_surface_gravity
+  auxilliary_index: # which auxilliary data to include --planet_ID,star_distance,star_mass_kg,star_radius_m,star_temperature,planet_mass_kg,planet_orbital_period,planet_distance,planet_radius_m,planet_surface_gravity
+    # - 0 #star_distance
+    # - 1 #star_mass_kg
+    # - 2 #star_radius_m
+    #- 3 #star_temperature
+    - 4 #log_planet_mass_kg
+    # - 5 #planet_orbital_period
+    # - 6 #planet_distance
+    - 7 #planet_radius_m
+    # - 8 #planet_surface_gravity
+
+
+
+# --- Model configuration ---
+train:
+  weighting_bins: false # number of bins for weighted loss
+                        # must be considerably less than batch size!!
+  batch_size: 32
+  train_test_split: #as fraction, must add to 1
+    - 0.5
+    - 0.5
+  epochs: 150
+  learning_rate: 1.0e-3
+  weight_decay: 0
+
+  patience: 50
+  improvement_threshold: 1 #% 1
+
+# --- Validation configuration ---
+evaluate:
+  instances: 10 # number of times to sample from the generated distribution
+  batch_size: 256
+
+  injection_size: 10000 # number of points of noise to inject
+  step_size: 1 # step size for the noise injection
+  fwhm: 0.1 # full width half maximum for the noise injection
+  magnitude: 0.0003 # magnitude of the noise injection
