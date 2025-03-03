@@ -9,21 +9,26 @@ Example:
 
 """
 
+dataset = "../DATA/proccessed_22.hdf5"
+checkpoint_path = "../DATA/checkpoint_22_contribution_proccessing.yaml"
+load_path = "/Users/jools/Documents/UCL/ARIEL/ariel_project_code/SpectralForklift/contribution_22_checkpoint_backup_10830.hdf5"
+
 #---######################################################################
 #---                              Imports                                 
 #---######################################################################
 
-import argparse
-import yaml
-import os
+# default imports
+import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
-from tqdm import tqdm
-import xarray as xr
+import yaml
+import os
 
+from tqdm import tqdm as tqdm
 
-from taurex_utils import get_mols, full_contribution_array
-import json
+# custom imports
+from taurex_utils_v2 import get_mols, full_contribution_array
+
 #---######################################################################
 #---                           Functions                                  
 #---######################################################################
@@ -48,109 +53,216 @@ def kg_to_Mj(mass_kg):
     return mass_kg / 1.898e27
 
 
-def save_checkpoint(checkpoint_path, current_index):
+def save_checkpoint_yaml(checkpoint_path, current_index):
     """
-    Save the current progress to a checkpoint file.
+    Save the current progress to a YAML checkpoint file.
     """
     with open(checkpoint_path, 'w') as f:
-        json.dump({"current_index": current_index}, f)
+        yaml.dump({"current_index": current_index}, f)
 
-def load_checkpoint(checkpoint_path):
+def load_checkpoint_yaml(checkpoint_path):
     """
-    Load the last saved progress from a checkpoint file.
+    Load the last saved progress from a YAML checkpoint file.
     """
     if os.path.exists(checkpoint_path):
         with open(checkpoint_path, 'r') as f:
-            return json.load(f).get("current_index", 0)
+            return yaml.safe_load(f).get("current_index", 0)
     return 0
 
 #---######################################################################
 #---                         Main Script                                  
 #---######################################################################
 
-if __name__ == "__main__":
-    # Parse arguments and load config
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True, help="Path to config file")
-    args = parser.parse_args()
+# - Load the checkpoint -
+
+if not os.path.exists(checkpoint_path):
+    save_checkpoint_yaml(checkpoint_path, 0)
+    start_index = 0
+
+else:
+    start_index = load_checkpoint_yaml(checkpoint_path)
+    try:
+        start_index = int(start_index)
+    except:
+        raise ValueError(f"Could not convert {start_index} to an integer")
+
+# - Load the dataset -
+
+if start_index != 0:
+    ds_c = xr.open_dataset(load_path)
+    sample_index = ds_c['sample'].values
+    # get largest non zero contributution index
+    si = ds_c['contributions'].sel(sample=slice(start_index, None)).sum(['species', 'wavelength']).where(lambda x: x > 0).dropna('sample').sample.values
+    print(f"Loaded dataset with {si.size} samples. Resuming at index {start_index}")
+
+# - Create a new copy of the dataset if no checkpoint found -
+
+else:
+    input("WARNING! Checkpoint not found or zero. Starting a new experiment.\nThis will overwrite existing data. Do you wish to proceed? y/N")
+
+    ds = xr.open_dataset(dataset)
+
+    sample_index = ds['sample'].values
+
+    ds_c = ds.__deepcopy__()
+    ds.close()
+
+    ds_c.coords['species'] = get_mols()
+
+
+    empty_arr = np.empty((len(sample_index), len(get_mols()), len(ds_c['wavelength'])))
+    empty_arr.fill(np.nan)
+    ds_c['contributions'] = xr.DataArray(empty_arr, dims=['sample', 'species', 'wavelength'])
+    ds_c['contributions'].attrs = dict(units='transit depth', 
+                                    dataset='taurex forward model',
+                                    description='spectra per species if only that species was present in the atmosphere')
+
+    ds_c['clean_forward_model'] = xr.DataArray(empty_arr[:,0,:], dims=['sample', 'wavelength'])
+    ds_c['clean_forward_model'].attrs = dict(units='transit depth',
+                                            dataset='taurex forward model',
+                                            description='forward model spectra with full species compliment present in the atmosphere, but no instrument noise simulated')
+
+# - Generate the contribution functions -
+
+print(f'Processing {start_index} to {sample_index[-1]}')
+
+for planet in tqdm(range(start_index, sample_index.size)):
+
+    # get the planet data from the dataset
+
+    abundancies = ds_c[[f'log_{s}' for s in get_mols()]].sel(sample=planet).to_array().values
+    planet_temp = ds_c['planet_temp_k'].sel(sample=planet).values
+    planet_radius = m_to_rJ(ds_c['planet_radius_m'].sel(sample=planet).values)
+
+    planet_mass = kg_to_Mj(ds_c['planet_mass_kg'].sel(sample=planet).values)
+    star_radius = m_to_rS(ds_c['star_radius_m'].sel(sample=planet).values)
+    star_temp = ds_c['star_temperature_k'].sel(sample=planet).values
+
+
+    # generate the contribution functions for all of the elements present in the planet
+
+    contribs = full_contribution_array(['H2O', 'CO2', 'CH4', 'CO', 'NH3'],
+                                    abundancies,
+                                    Rp=planet_radius,
+                                    Tp=planet_temp,
+                                    Mp=planet_mass,
+                                    Rs= star_radius,
+                                    Ts=star_temp)
     
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
     
-    # Get output directory from config
-    save_config = config.get("output", {})
-    save_path = save_config.get("output_dir", "./output")
+    # save the contributions to the dataset
+    for s in get_mols():
+        ds_c['contributions'].loc[dict(sample=planet, species=s)] = contribs[s][1][::-1] # these are also in reverse wavelength order for some reason!
+
+    # save the clean forward model
+    ds_c['clean_forward_model'].loc[dict(sample=planet)] = contribs['Full Model'][1][::-1]
+
     
-    log_utils.write_box(f"Editing data in: {save_path}", style='hashdash')
+
+    # save every 30 planets
+    if planet % 10 == 0:
+        try:
+            ds_c.to_netcdf(f'../DATA/contribution_22_checkpoint.hdf5')
+            save_checkpoint_yaml(checkpoint_path, planet)
+        except Exception as e:
+            print(f"CAUTION!! Failed to save checkpoint: {e}")
+            ds_c.to_netcdf(f'../DATA/contribution_22_checkpoint_EMERGENCY_SAVE_{np.random.randint(10000,99999)}.hdf5')
+            
+
+# - Save the final dataset -
+
+ds_c.to_netcdf(f'../DATA/contribution_22_full.hdf5')
+save_checkpoint_yaml(checkpoint_path, "Completed")
+
+
+
+
+
+
+
+# if __name__ == "__main__":
+#     # Parse arguments and load config
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument("--config", required=True, help="Path to config file")
+#     args = parser.parse_args()
     
-    # Process both train and validation data
-
-    dir_path = os.path.join(save_path, 'validation')
+#     with open(args.config, 'r') as f:
+#         config = yaml.safe_load(f)
     
-    if not os.path.exists(dir_path):
-        raise FileNotFoundError(f"Directory {dir_path} does not exist")
+#     # Get output directory from config
+#     save_config = config.get("output", {})
+#     save_path = save_config.get("output_dir", "./output")
     
-    # Load data
-    data, labels, aux, aux_f = read_csv_data(dir_path, full_auxilliary=True)
-    # Checkpoint path
-    checkpoint_path = os.path.join(dir_path, "generation_checkpoint.json")
+#     log_utils.write_box(f"Editing data in: {save_path}", style='hashdash')
+    
+#     # Process both train and validation data
 
-    # Load checkpoint if available
-    start_index = load_checkpoint(checkpoint_path)
-    #--- generate contribution functions for each species
+#     dir_path = os.path.join(save_path, 'validation')
+    
+#     if not os.path.exists(dir_path):
+#         raise FileNotFoundError(f"Directory {dir_path} does not exist")
+    
+#     # Load data
+#     data, labels, aux, aux_f = read_csv_data(dir_path, full_auxilliary=True)
+#     # Checkpoint path
+#     checkpoint_path = os.path.join(dir_path, "generation_checkpoint.json")
 
-    db_contribs = {}
+#     # Load checkpoint if available
+#     start_index = load_checkpoint(checkpoint_path)
+#     #--- generate contribution functions for each species
 
-    for species in get_mols():
-        # print(species)
-        db_contribs[species] = np.zeros_like(data)
+#     db_contribs = {}
 
-    # print(db_contribs.keys())
+#     for species in get_mols():
+#         # print(species)
+#         db_contribs[species] = np.zeros_like(data)
 
-    # print('Generating contribution functions...')
+#     # print(db_contribs.keys())
 
-    for planet in tqdm(range(start_index,data.shape[0])):
+#     # print('Generating contribution functions...')
 
-        abundancies = labels[planet, 1:]
-        planet_temp = labels[planet, 0]
-        planet_radius = m_to_rJ(aux_f[planet, -2])
+#     for planet in tqdm(range(start_index,data.shape[0])):
 
-        planet_mass = kg_to_Mj(aux_f[planet, 4])
-        star_radius = m_to_rS(aux_f[planet, 2])
-        star_temp = aux_f[planet, 3]
+#         abundancies = labels[planet, 1:]
+#         planet_temp = labels[planet, 0]
+#         planet_radius = m_to_rJ(aux_f[planet, -2])
 
-        # print(f'Planet {planet} - ')
+#         planet_mass = kg_to_Mj(aux_f[planet, 4])
+#         star_radius = m_to_rS(aux_f[planet, 2])
+#         star_temp = aux_f[planet, 3]
+
+#         # print(f'Planet {planet} - ')
                 
-        #for species in get_mols():
-            # print(f'{species}: {abundancies[get_mols().index(species)]}')
-        # print(f'Planet Temp: {planet_temp}\nPlanet Radius: {planet_radius}\nPlanet Mass: {planet_mass}')
-        # print(f'Star Temp: {star_temp}\nStar Radius: {star_radius}')
+#         #for species in get_mols():
+#             # print(f'{species}: {abundancies[get_mols().index(species)]}')
+#         # print(f'Planet Temp: {planet_temp}\nPlanet Radius: {planet_radius}\nPlanet Mass: {planet_mass}')
+#         # print(f'Star Temp: {star_temp}\nStar Radius: {star_radius}')
 
-        # generate the contribution functions for all of the elements present in the planet
+#         # generate the contribution functions for all of the elements present in the planet
 
-        contribs = full_contribution_array(['H2O', 'CO2', 'CH4', 'CO', 'NH3'],
-                                       abundancies,
-                                       Rp=planet_radius,
-                                       Tp=planet_temp,
-                                       Mp=planet_mass,
-                                       Rs= star_radius,
-                                       Ts=star_temp)
+#         contribs = full_contribution_array(['H2O', 'CO2', 'CH4', 'CO', 'NH3'],
+#                                        abundancies,
+#                                        Rp=planet_radius,
+#                                        Tp=planet_temp,
+#                                        Mp=planet_mass,
+#                                        Rs= star_radius,
+#                                        Ts=star_temp)
         
-        for species in get_mols():
+#         for species in get_mols():
 
-            db_contribs[species][planet] = contribs[species][1]
+#             db_contribs[species][planet] = contribs[species][1]
 
-        # save every 30 planets
-        if planet % 10 == 0:
-            for species in get_mols():
-                data = db_contribs[species]
-                np.savetxt(os.path.join(dir_path, f'contributions_temp_{species}.csv'), data, delimiter=',')
-            save_checkpoint(checkpoint_path, planet)
-    # Save data back to CSV
-    for species in get_mols():
-        data = db_contribs[species]
-        np.savetxt(os.path.join(dir_path, f'contributions_temp_{species}.csv'), data, delimiter=',')
-    # Remove checkpoint file after successful completion
-    if os.path.exists(checkpoint_path):
-        os.remove(checkpoint_path)
-    log_utils.write_box("Contribution Generation complete!", style='hashdash')
+#         # save every 30 planets
+#         if planet % 10 == 0:
+#             for species in get_mols():
+#                 data = db_contribs[species]
+#                 np.savetxt(os.path.join(dir_path, f'contributions_temp_{species}.csv'), data, delimiter=',')
+#             save_checkpoint(checkpoint_path, planet)
+#     # Save data back to CSV
+#     for species in get_mols():
+#         data = db_contribs[species]
+#         np.savetxt(os.path.join(dir_path, f'contributions_temp_{species}.csv'), data, delimiter=',')
+#     # Remove checkpoint file after successful completion
+#     if os.path.exists(checkpoint_path):
+#         os.remove(checkpoint_path)
+#     log_utils.write_box("Contribution Generation complete!", style='hashdash')
