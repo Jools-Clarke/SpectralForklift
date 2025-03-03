@@ -14,8 +14,8 @@ from taurex.model import TransmissionModel
 import taurex.log
 taurex.log.disableLogging()
 
-opacity_path="../TauRex_tutorial/taurex3_xsec_hdf5_sampled_R15000_0.3-50/"
-CIA_path="../TauRex_tutorial/HITRAN"
+opacity_path="../DATA/XSEC/taurex3_xsec_hdf5_sampled_R15000_0.3-50"
+CIA_path="../DATA/HITRAN"
 
 ###############################
 # params from the dataset gen #
