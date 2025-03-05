@@ -159,7 +159,7 @@ for planet in tqdm(range(start_index, sample_index.size)):
 
     
 
-    # save every 30 planets
+    # save every 10 planets
     if planet % 10 == 0:
         try:
             ds_c.to_netcdf(f'../DATA/contribution_22_checkpoint.hdf5')
