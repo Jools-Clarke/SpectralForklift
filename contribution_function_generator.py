@@ -11,7 +11,7 @@ Example:
 
 dataset = "../DATA/proccessed_22.hdf5"
 checkpoint_path = "../DATA/checkpoint_22_contribution_proccessing.yaml"
-load_path = "/Users/jools/Documents/UCL/ARIEL/ariel_project_code/SpectralForklift/contribution_22_checkpoint_backup_10830.hdf5"
+load_path = "/Users/jools/Documents/UCL/ARIEL/ariel_project_code/SpectralForklift/contrib_gen_checkpoints/contribution_22_checkpoint_backup_81430.hdf5"
 
 #---######################################################################
 #---                              Imports                                 
@@ -98,8 +98,11 @@ if start_index != 0:
 # - Create a new copy of the dataset if no checkpoint found -
 
 else:
-    input("WARNING! Checkpoint not found or zero. Starting a new experiment.\nThis will overwrite existing data. Do you wish to proceed? y/N")
-
+    proceed = input("WARNING! Checkpoint not found or zero. Starting a new experiment.\nThis will overwrite existing data. Do you wish to proceed? y/N")
+    if proceed.lower() != 'n':
+        print("Exiting...")
+        exit()
+    
     ds = xr.open_dataset(dataset)
 
     sample_index = ds['sample'].values
